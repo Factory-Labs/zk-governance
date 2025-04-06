@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "src/ZkPullCaller.sol";
 import "src/ZkPullTarget.sol";
+import "src/MerkleDropFactory.sol";
 import "src/ZkCappedMinterV2.sol";
 import {ZkPullTargetTest} from "./ZkPullTarget.t.sol";
 
@@ -25,6 +26,13 @@ contract MockERC20 is Test {
         require(balanceOf[from] >= amount, "Insufficient balance");
         allowance[from][msg.sender] -= amount;
         balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
+        balanceOf[msg.sender] -= amount;
         balanceOf[to] += amount;
         return true;
     }
@@ -168,5 +176,107 @@ contract MintFromZkCappedMinter is ZkPullCallerTest {
         assertEq(token.balanceOf(address(caller)), 0); // 200 - 100 = 100 ether
         assertEq(token.balanceOf(address(target)), 500 ether);
         assertEq(token.allowance(address(caller), address(target)), 0);
+    }
+}
+
+contract MerkleTargetTest is Test {
+    ZkPullCaller public caller;
+    MerkleDropFactory public target;
+    MockERC20 public token;
+    address public user = address(0x123);
+    ZkCappedMinterV2 public cappedMinter;
+    address cappedMinterAdmin = makeAddr("cappedMinterAdmin");
+    bytes32 constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
+    event WithdrawalOccurred(uint indexed treeIndex, address indexed destination, uint value);
+
+    function setUp() public virtual {
+        token = new MockERC20();
+        target = new MerkleDropFactory();
+
+        // Setup Merkle tree
+        uint256 withdrawAmount = 500 ether;
+        address destination = address(0x456); // Where tokens will go
+        bytes32 leaf = keccak256(abi.encode(destination, withdrawAmount));
+        bytes32 merkleRoot = leaf; // Simplest tree: root = leaf (single entry)
+        bytes32 ipfsHash = keccak256("ipfs data");
+
+        // Deploy ZkPullCaller with the function signature for addMerkleTree
+        bytes memory sig = abi.encodeWithSignature("addMerkleTree(bytes32,bytes32,address,uint256)");
+        bytes memory callData = abi.encode(merkleRoot, ipfsHash, address(token), uint256(500 ether));
+        caller = new ZkPullCaller(address(token), address(target), sig, callData);
+
+        // Setup ZkCappedMinterV2
+        uint48 startTime = uint48(block.timestamp);
+        uint48 expirationTime = uint48(startTime + 3 days);
+        uint256 cap = 100_000_000e18;
+
+        cappedMinter = new ZkCappedMinterV2(
+            IMintable(address(token)), // Assuming MockERC20 is compatible with IMintable
+            cappedMinterAdmin,
+            cap,
+            startTime,
+            expirationTime
+        );
+    }
+
+    function testMintFromCappedMinterAndWithdrawFromMerkleDrop() public {
+        // Setup Merkle tree
+        uint256 withdrawAmount = 500 ether;
+        address destination = address(0x456); // Where tokens will go
+        bytes32 leaf = keccak256(abi.encode(destination, withdrawAmount));
+        bytes32 merkleRoot = leaf; // Simplest tree: root = leaf (single entry)
+        bytes32 ipfsHash = keccak256("ipfs data");
+
+        // Mint tokens to ZkPullCaller via ZkCappedMinterV2
+        address minter = makeAddr("minter");
+        vm.prank(cappedMinterAdmin);
+        cappedMinter.grantRole(MINTER_ROLE, minter);
+
+        vm.prank(minter);
+        cappedMinter.mint(address(caller), 500 ether);
+
+        // Verify initial state
+        assertEq(token.balanceOf(address(caller)), 500 ether);
+        assertEq(token.balanceOf(address(target)), 0);
+        assertEq(token.balanceOf(destination), 0);
+
+        vm.prank(user);
+        caller.initiateCall();
+
+        assertEq(token.balanceOf(address(caller)), 0 ether);
+        assertEq(token.balanceOf(address(target)), 500 ether);
+        assertEq(token.balanceOf(destination), 0 ether);
+
+        // Verify tree setup
+        (bytes32 merkleRoot1, bytes32 ipfsHash1, address tokenAddress1, uint tokenBalance1, uint spentTokens1) = target.merkleTrees(1);
+
+        assertEq(merkleRoot1, merkleRoot);
+        assertEq(ipfsHash1, ipfsHash);
+        assertEq(tokenAddress1, address(token));
+        assertEq(tokenBalance1, 500 ether);
+        assertEq(spentTokens1, 0);
+
+        // Expect the WithdrawalOccurred event
+        vm.expectEmit(true, true, false, true, address(target));
+        emit WithdrawalOccurred(1, destination, withdrawAmount);
+
+        bytes32[] memory proof = new bytes32[](0);
+        target.withdraw(1, destination, 500 ether, proof);
+
+
+        assertEq(token.balanceOf(address(caller)), 0 ether);
+        assertEq(token.balanceOf(address(target)), 0 ether);
+        assertEq(token.balanceOf(destination), 500 ether);
+
+        {
+            (bytes32 merkleRoot2, bytes32 ipfsHash2, address tokenAddress2, uint tokenBalance2, uint spentTokens2) = target.merkleTrees(1);
+            assertEq(merkleRoot2, merkleRoot);
+            assertEq(ipfsHash2, ipfsHash);
+            assertEq(tokenAddress2, address(token));
+            assertEq(tokenBalance2, 0);
+            assertEq(spentTokens2, 500 ether);
+        }
+        assertTrue(target.getWithdrawn(1, leaf));
     }
 }
