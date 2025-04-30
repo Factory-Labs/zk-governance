@@ -13,10 +13,10 @@ contract ZkPullCaller {
     bytes public callData;            // The call data for the function
 
     // Constructor to set the token, target contract, and function signature
-    constructor(address _admin, address _tokenAddress, address _targetAddress, bytes memory _functionSignature, bytes memory _callData) {
+    constructor(address _tokenAddress, address _targetAddress, bytes memory _functionSignature, bytes memory _callData) {
         token = IERC20(_tokenAddress);
         target = _targetAddress;
-        admin = _admin;
+        admin = msg.sender;
         functionSignature = _functionSignature;
         callData = _callData;
     }

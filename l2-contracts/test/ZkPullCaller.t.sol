@@ -44,6 +44,11 @@ contract ZkPullCallerTest is Test {
     MockERC20 public token;
     address public user = address(0x123);
 
+    ZkCappedMinterV2 public cappedMinter;
+    address cappedMinterAdmin = makeAddr("cappedMinterAdmin");
+    bytes32 constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
+
     event TransferProcessed(address indexed sender, uint256 amount);
 
     function setUp() public virtual {
@@ -55,14 +60,27 @@ contract ZkPullCallerTest is Test {
         bytes memory callData = abi.encode(uint256(500 ether)); // Fixed amount baked in
         caller = new ZkPullCaller(address(token), address(target), sig, callData);
 
+        // Setup ZkCappedMinterV2
+        uint48 startTime = uint48(block.timestamp);
+        uint48 expirationTime = uint48(startTime + 3 days);
+        uint256 cap = 500e18;
+
+        cappedMinter = new ZkCappedMinterV2(
+            IMintable(address(token)), // Assuming MockERC20 is compatible with IMintable
+            cappedMinterAdmin,
+            cap,
+            startTime,
+            expirationTime
+        );
+
+        caller.setMinter(address(cappedMinter));
+        vm.prank(cappedMinterAdmin);
+        cappedMinter.grantRole(MINTER_ROLE, address(caller));
     }
 
     function testInitiateCallFullBalance() public {
-        // Mint tokens to the caller contract
-        token.mint(address(caller), 500 ether);
-
         uint256 initialBalance = token.balanceOf(address(caller));
-        assertEq(initialBalance, 500 ether);
+        assertEq(initialBalance, 0);
 
         // Expect the event from TransferAndLogic
         vm.expectEmit(true, false, false, true, address(target));
@@ -99,69 +117,31 @@ contract ZkPullCallerTest is Test {
     }
 
     function testCallWithCustomCallData() public {
-        // Mint tokens to the caller contract
-        token.mint(address(caller), 500 ether);
-
-        // Deploy a new caller with custom callData including a different amount
-        bytes memory sig = abi.encodeWithSignature("executeTransferAndLogic(uint256)");
-        bytes memory customCallData = abi.encode(uint256(300 ether));
-        ZkPullCaller customCaller = new ZkPullCaller(address(token), address(target), sig, customCallData);
-
-        // Mint tokens to the new caller
-        token.mint(address(customCaller), 300 ether);
-
         // Expect the event with the fixed amount from callData
         vm.expectEmit(true, false, false, true, address(target));
-        emit TransferProcessed(address(customCaller), 300 ether);
+        emit TransferProcessed(address(caller), 500 ether);
 
         // Call initiateCall
         vm.prank(user);
-        customCaller.initiateCall();
+        caller.initiateCall();
 
         // Verify token transfer
-        assertEq(token.balanceOf(address(customCaller)), 0);
-        assertEq(token.balanceOf(address(target)), 300 ether);
+        assertEq(token.balanceOf(address(caller)), 0);
+        assertEq(token.balanceOf(address(target)), 500 ether);
     }
 }
 
 contract MintFromZkCappedMinter is ZkPullCallerTest {
-    ZkCappedMinterV2 public cappedMinter;
-    address cappedMinterAdmin = makeAddr("cappedMinterAdmin");
-    bytes32 constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     function setUp() public virtual override {
         // Call parent setUp first
         super.setUp();
 
-        // Setup ZkCappedMinterV2
-        uint48 startTime = uint48(block.timestamp);
-        uint48 expirationTime = uint48(startTime + 3 days);
-        uint256 cap = 100_000_000e18;
-
-        cappedMinter = new ZkCappedMinterV2(
-            IMintable(address(token)), // Assuming MockERC20 is compatible with IMintable
-            cappedMinterAdmin,
-            cap,
-            startTime,
-            expirationTime
-        );
     }
 
     function testMintFromCappedMinterAndInitiateCall() public {
-        // Mint tokens to ZkPullCaller via ZkCappedMinterV2
-        uint256 mintAmount = 500 ether; // Enough to cover the 100 ether in callData
-        address minter = makeAddr("minter");
-
-        // Grant MINTER_ROLE to minter on cappedMinter
-        vm.prank(cappedMinterAdmin);
-        cappedMinter.grantRole(MINTER_ROLE, minter);
-
-        // Mint tokens to caller
-        vm.prank(minter);
-        cappedMinter.mint(address(caller), mintAmount);
-
         // Verify initial state
-        assertEq(token.balanceOf(address(caller)), mintAmount);
+        assertEq(token.balanceOf(address(caller)), 0);
         assertEq(token.balanceOf(address(target)), 0);
 
         // Expect the TransferProcessed event with the fixed amount
@@ -173,7 +153,7 @@ contract MintFromZkCappedMinter is ZkPullCallerTest {
         caller.initiateCall();
 
         // Verify final state
-        assertEq(token.balanceOf(address(caller)), 0); // 200 - 100 = 100 ether
+        assertEq(token.balanceOf(address(caller)), 0);
         assertEq(token.balanceOf(address(target)), 500 ether);
         assertEq(token.allowance(address(caller), address(target)), 0);
     }
@@ -209,7 +189,7 @@ contract MerkleTargetTest is Test {
         // Setup ZkCappedMinterV2
         uint48 startTime = uint48(block.timestamp);
         uint48 expirationTime = uint48(startTime + 3 days);
-        uint256 cap = 100_000_000e18;
+        uint256 cap = 500e18;
 
         cappedMinter = new ZkCappedMinterV2(
             IMintable(address(token)), // Assuming MockERC20 is compatible with IMintable
@@ -218,6 +198,10 @@ contract MerkleTargetTest is Test {
             startTime,
             expirationTime
         );
+
+        caller.setMinter(address(cappedMinter));
+        vm.prank(cappedMinterAdmin);
+        cappedMinter.grantRole(MINTER_ROLE, address(caller));
     }
 
     function testMintFromCappedMinterAndWithdrawFromMerkleDrop() public {
@@ -228,16 +212,8 @@ contract MerkleTargetTest is Test {
         bytes32 merkleRoot = leaf; // Simplest tree: root = leaf (single entry)
         bytes32 ipfsHash = keccak256("ipfs data");
 
-        // Mint tokens to ZkPullCaller via ZkCappedMinterV2
-        address minter = makeAddr("minter");
-        vm.prank(cappedMinterAdmin);
-        cappedMinter.grantRole(MINTER_ROLE, minter);
-
-        vm.prank(minter);
-        cappedMinter.mint(address(caller), 500 ether);
-
         // Verify initial state
-        assertEq(token.balanceOf(address(caller)), 500 ether);
+        assertEq(token.balanceOf(address(caller)), 0 ether);
         assertEq(token.balanceOf(address(target)), 0);
         assertEq(token.balanceOf(destination), 0);
 
