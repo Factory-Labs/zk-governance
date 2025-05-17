@@ -4,7 +4,7 @@ pragma solidity 0.8.24;
 import "src/interfaces/IERC20.sol";
 
 
-contract ZkPullTarget {
+contract ZkMinterModTargetExampleV1 {
     IERC20 public token; // The ERC20 token contract address
 
     // Constructor to set the token address

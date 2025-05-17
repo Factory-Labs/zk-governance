@@ -4,26 +4,46 @@ pragma solidity 0.8.24;
 import "src/interfaces/IERC20.sol";
 import "src/interfaces/IZkCappedMinter.sol";
 
-contract ZkPullCaller {
+contract ZkMinterModTriggerV1 {
     IERC20 public token;              // The ERC20 token contract
     IZkCappedMinter public minter;    // The ZkCappedMinter for which this project
     address public target;            // The target contract to call
-    address public admin;
+    address public admin;             // The address that can change everything
     bytes public functionSignature;   // The function signature to execute (e.g., function selector)
     bytes public callData;            // The call data for the function
 
+    modifier adminOnly {
+        require(msg.sender == admin, "Only admin can call this");
+        _;
+    }
+
     // Constructor to set the token, target contract, and function signature
-    constructor(address _tokenAddress, address _targetAddress, bytes memory _functionSignature, bytes memory _callData) {
+    constructor(address _admin, address _tokenAddress, address _targetAddress, bytes memory _functionSignature, bytes memory _callData) {
         token = IERC20(_tokenAddress);
         target = _targetAddress;
-        admin = msg.sender;
+        admin = _admin;
         functionSignature = _functionSignature;
         callData = _callData;
     }
 
-    function setMinter(address _minter) external {
-        require(msg.sender == admin, "Only admin can call set the minter");
+    function setMinter(address _minter) external adminOnly {
         minter = IZkCappedMinter(_minter);
+    }
+
+    function setTarget(address _target) external adminOnly {
+        target = _target;
+    }
+
+    function setAdmin(address _admin) external adminOnly {
+        admin = _admin;
+    }
+
+    function setFunctionSignature(bytes calldata _functionSignature) external adminOnly {
+        functionSignature = _functionSignature;
+    }
+
+    function setCallData(bytes calldata _callData) external adminOnly {
+        callData = _callData;
     }
 
     // Function to approve and call with arbitrary calldata

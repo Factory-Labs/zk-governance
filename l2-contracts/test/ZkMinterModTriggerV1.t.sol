@@ -2,11 +2,10 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "src/ZkPullCaller.sol";
-import "src/ZkPullTarget.sol";
+import "src/ZkMinterModTriggerV1.sol";
+import "src/ZkMinterModTargetExampleV1.sol";
 import "src/MerkleDropFactory.sol";
 import "src/ZkCappedMinterV2.sol";
-import {ZkPullTargetTest} from "./ZkPullTarget.t.sol";
 
 contract MockERC20 is Test {
     mapping(address => uint256) public balanceOf;
@@ -38,9 +37,9 @@ contract MockERC20 is Test {
     }
 }
 
-contract ZkPullCallerTest is Test {
-    ZkPullCaller public caller;
-    ZkPullTarget public target;
+contract ZkMinterModTriggerV1Test is Test {
+    ZkMinterModTriggerV1 public trigger;
+    ZkMinterModTargetExampleV1 public target;
     MockERC20 public token;
     address public user = address(0x123);
 
@@ -53,12 +52,12 @@ contract ZkPullCallerTest is Test {
 
     function setUp() public virtual {
         token = new MockERC20();
-        target = new ZkPullTarget(address(token));
+        target = new ZkMinterModTargetExampleV1(address(token));
 
         // Deploy GenericCaller with the function signature for executeTransferAndLogic
         bytes memory sig = abi.encodeWithSignature("executeTransferAndLogic(uint256)");
         bytes memory callData = abi.encode(uint256(500 ether)); // Fixed amount baked in
-        caller = new ZkPullCaller(address(token), address(target), sig, callData);
+        trigger = new ZkMinterModTriggerV1(cappedMinterAdmin, address(token), address(target), sig, callData);
 
         // Setup ZkCappedMinterV2
         uint48 startTime = uint48(block.timestamp);
@@ -72,40 +71,40 @@ contract ZkPullCallerTest is Test {
             startTime,
             expirationTime
         );
-
-        caller.setMinter(address(cappedMinter));
         vm.prank(cappedMinterAdmin);
-        cappedMinter.grantRole(MINTER_ROLE, address(caller));
+        trigger.setMinter(address(cappedMinter));
+        vm.prank(cappedMinterAdmin);
+        cappedMinter.grantRole(MINTER_ROLE, address(trigger));
     }
 
     function testInitiateCallFullBalance() public {
-        uint256 initialBalance = token.balanceOf(address(caller));
+        uint256 initialBalance = token.balanceOf(address(trigger));
         assertEq(initialBalance, 0);
 
         // Expect the event from TransferAndLogic
         vm.expectEmit(true, false, false, true, address(target));
-        emit TransferProcessed(address(caller), 500 ether);
+        emit TransferProcessed(address(trigger), 500 ether);
 
         // Call initiateCall as the user (though caller uses its own balance)
         vm.prank(user);
-        caller.initiateCall();
+        trigger.initiateCall();
 
         // Verify tokens were transferred to the target
-        assertEq(token.balanceOf(address(caller)), 0);
+        assertEq(token.balanceOf(address(trigger)), 0);
         assertEq(token.balanceOf(address(target)), 500 ether);
 
         // Verify allowance was set and consumed
-        assertEq(token.allowance(address(caller), address(target)), 0);
+        assertEq(token.allowance(address(trigger), address(target)), 0);
     }
 
     function testFailInsufficientBalance() public {
         // Mint tokens to the caller contract
-        token.mint(address(caller), 500 ether);
+        token.mint(address(trigger), 500 ether);
 
         // Deploy a new caller with insufficient tokens
         bytes memory sig = abi.encodeWithSignature("executeTransferAndLogic(uint256)");
         bytes memory callData = abi.encode(uint256(200 ether));
-        ZkPullCaller lowBalanceCaller = new ZkPullCaller(address(token), address(target), sig, callData);
+        ZkMinterModTriggerV1 lowBalanceCaller = new ZkMinterModTriggerV1(cappedMinterAdmin, address(token), address(target), sig, callData);
 
         // Mint less than the required amount
         token.mint(address(lowBalanceCaller), 100 ether);
@@ -119,19 +118,19 @@ contract ZkPullCallerTest is Test {
     function testCallWithCustomCallData() public {
         // Expect the event with the fixed amount from callData
         vm.expectEmit(true, false, false, true, address(target));
-        emit TransferProcessed(address(caller), 500 ether);
+        emit TransferProcessed(address(trigger), 500 ether);
 
         // Call initiateCall
         vm.prank(user);
-        caller.initiateCall();
+        trigger.initiateCall();
 
         // Verify token transfer
-        assertEq(token.balanceOf(address(caller)), 0);
+        assertEq(token.balanceOf(address(trigger)), 0);
         assertEq(token.balanceOf(address(target)), 500 ether);
     }
 }
 
-contract MintFromZkCappedMinter is ZkPullCallerTest {
+contract MintFromZkCappedMinter is ZkMinterModTriggerV1Test {
 
     function setUp() public virtual override {
         // Call parent setUp first
@@ -141,26 +140,26 @@ contract MintFromZkCappedMinter is ZkPullCallerTest {
 
     function testMintFromCappedMinterAndInitiateCall() public {
         // Verify initial state
-        assertEq(token.balanceOf(address(caller)), 0);
+        assertEq(token.balanceOf(address(trigger)), 0);
         assertEq(token.balanceOf(address(target)), 0);
 
         // Expect the TransferProcessed event with the fixed amount
         vm.expectEmit(true, false, false, true, address(target));
-        emit TransferProcessed(address(caller), 500 ether);
+        emit TransferProcessed(address(trigger), 500 ether);
 
         // Execute the initiateCall flow
         vm.prank(user);
-        caller.initiateCall();
+        trigger.initiateCall();
 
         // Verify final state
-        assertEq(token.balanceOf(address(caller)), 0);
+        assertEq(token.balanceOf(address(trigger)), 0);
         assertEq(token.balanceOf(address(target)), 500 ether);
-        assertEq(token.allowance(address(caller), address(target)), 0);
+        assertEq(token.allowance(address(trigger), address(target)), 0);
     }
 }
 
 contract MerkleTargetTest is Test {
-    ZkPullCaller public caller;
+    ZkMinterModTriggerV1 public caller;
     MerkleDropFactory public target;
     MockERC20 public token;
     address public user = address(0x123);
@@ -181,10 +180,10 @@ contract MerkleTargetTest is Test {
         bytes32 merkleRoot = leaf; // Simplest tree: root = leaf (single entry)
         bytes32 ipfsHash = keccak256("ipfs data");
 
-        // Deploy ZkPullCaller with the function signature for addMerkleTree
+        // Deploy ZkMinterModTriggerV1 with the function signature for addMerkleTree
         bytes memory sig = abi.encodeWithSignature("addMerkleTree(bytes32,bytes32,address,uint256)");
         bytes memory callData = abi.encode(merkleRoot, ipfsHash, address(token), uint256(500 ether));
-        caller = new ZkPullCaller(address(token), address(target), sig, callData);
+        caller = new ZkMinterModTriggerV1(cappedMinterAdmin, address(token), address(target), sig, callData);
 
         // Setup ZkCappedMinterV2
         uint48 startTime = uint48(block.timestamp);
@@ -199,6 +198,7 @@ contract MerkleTargetTest is Test {
             expirationTime
         );
 
+        vm.prank(cappedMinterAdmin);
         caller.setMinter(address(cappedMinter));
         vm.prank(cappedMinterAdmin);
         cappedMinter.grantRole(MINTER_ROLE, address(caller));
