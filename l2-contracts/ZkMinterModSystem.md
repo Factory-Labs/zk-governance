@@ -40,7 +40,7 @@ graph LR
     2. Calls the `mint` function on the `minter` contract to mint tokens directly to itself (`ZkMinterModTriggerV1`).
     3. Approves the `target` contract to spend the newly minted tokens.
     4. Executes the pre-configured function call (using `functionSignature` and `callData`) on the `target` contract.
-- **Admin Functions**: Allows the admin to update `minter`, `target`, `functionSignature`, and `callData`.
+- **Admin Functions**: Allows the Admin to update `minter`, `target`, `functionSignature`, and `callData`.
 - **More Info**: [ZkMinterModTriggerV1.md](./src/ZkMinterModTriggerV1.md)
 
 ### 2.2. `IZkCappedMinter` (e.g., `ZkCappedMinterV2.sol` - The Token Source)
@@ -80,7 +80,7 @@ The Foundry test suite (`ZkMinterModTriggerV1.t.sol`) provides comprehensive tes
 - **Complex DeFi Operations**: Orchestrate multi-step operations where initial token minting is a prerequisite.
 
 ## 6. Security Considerations
-- **Admin Privileges**: The admin of `ZkMinterModTriggerV1` has significant power to change its configuration. This key must be kept secure.
+- **Admin Privileges**: The Admin of `ZkMinterModTriggerV1` has significant power to change its configuration. This key must be kept secure.
 - **Target Contract Trust**: The security of the overall operation heavily depends on the security of the `target` contract. A malicious `target` could drain approved tokens.
 - **Minter Contract Security**: The `minter` contract must be secure and function as expected.
 - **Correct Configuration**: Incorrect `functionSignature` or `callData` can lead to failed transactions or unintended behavior on the target contract.

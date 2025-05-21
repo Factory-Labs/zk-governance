@@ -24,7 +24,7 @@ It can be configured to call any target contract and function, making it a flexi
 ## Functions
 
 ### `constructor(address _admin, address _tokenAddress, address _targetAddress, bytes memory _functionSignature, bytes memory _callData)`
-Initializes the trigger contract with admin, token, target, and call configuration.
+Initialises the trigger contract with admin, token, target, and call configuration.
 
 ### `setMinter(address _minter) external adminOnly`
 Updates the minter contract address. Only callable by the `admin`.
@@ -43,11 +43,10 @@ Updates the call data for the target function. Only callable by the `admin`.
 
 ### `initiateCall() external`
 This is the main function that orchestrates the operation:
-1. Calculates the `available` amount of tokens that can be minted from `minter` (up to its cap).
-2. Mints `available` tokens to this contract (`ZkMinterModTriggerV1`).
-3. Approves the `target` contract to spend the `available` minted tokens.
-4. Constructs the `fullCallData` by combining `functionSignature` and `callData`.
-5. Executes the call to the `target` contract with `fullCallData`.
+1. Determines the amount of tokens available to mint (up to the `minter`'s cap) and mints these tokens from `minter` to itself.
+2. Approves the `target` contract to spend the minted tokens.
+3. Constructs the `fullCallData` by combining `functionSignature` and `callData`.
+4. Executes the call to the `target` contract with `fullCallData`.
 
 ## Security Considerations
 - **Admin Control**: The `admin` has significant control. Secure the admin key diligently.
