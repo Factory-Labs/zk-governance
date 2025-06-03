@@ -57,7 +57,6 @@ async function main() {
 
   const constructorArgs = [
     ADMIN_ACCOUNT,
-    TOKEN_ADDRESS,
     targetAddresses,
     functionSignatures,
     callDatas,
