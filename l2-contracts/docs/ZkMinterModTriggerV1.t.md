@@ -10,9 +10,11 @@ A simple ERC20 token implementation for testing purposes, allowing minting, appr
 
 ### `ZkMinterModTriggerV1Test` (Base Contract)
 This contract sets up the common testing environment:
-- Deploys `MockERC20`.
-- Deploys `ZkMinterModTargetExampleV1` (as the `target`).
-- Deploys `ZkMinterModTriggerV1` (as `trigger`) configured to call `executeTransferAndLogic(uint256)` on the `target` with a fixed amount (500 ether).
+- Deploys `MockERC20` (as `token`).
+- Deploys `ZkMinterModTargetExampleV1` (as `target`), initialized with `address(token)`.
+- Deploys `ZkMinterModTriggerV1` (as `trigger`) configured with arrays for a two-call sequence:
+    1. **Target 0**: `token` contract. Function: `approve(address spender, uint256 amount)`. CallData: `spender = address(target)`, `amount = 500 ether`.
+    2. **Target 1**: `target` contract. Function: `executeTransferAndLogic(uint256 amount)`. CallData: `amount = 500 ether`.
 - Deploys `ZkCappedMinterV2` (as `cappedMinter`) and configures it:
     - Sets the `trigger` contract as a minter on `cappedMinter` by granting `MINTER_ROLE`.
     - Sets `cappedMinter` as the minter for the `trigger` contract.
@@ -22,23 +24,27 @@ This contract sets up the common testing environment:
 This contract focuses on tests specifically involving the minting process from `ZkCappedMinterV2` via `ZkMinterModTriggerV1`.
 
 ### `MerkleTargetTest`
-This contract tests the scenario where `ZkMinterModTriggerV1` is configured to interact with a `MerkleDropFactory` contract. It sets up:
+This contract tests the scenario where `ZkMinterModTriggerV1` is configured to interact with a `MerkleDropFactory` contract. 
+*(Note: The setup details for `ZkMinterModTriggerV1` within this test might need updating in the test code if it's still using a single-target configuration, to align with the latest multi-call `ZkMinterModTriggerV1` contract.)*
+It generally aims to set up:
 - `MockERC20`
-- `MerkleDropFactory` (as the `target`).
-- `ZkMinterModTriggerV1` (as `caller`) configured to call `addMerkleTree(...)` on the `MerkleDropFactory`.
+- `MerkleDropFactory` (as one of the `targets`).
+- `ZkMinterModTriggerV1` (as `caller`) configured with an array-based setup to ultimately call `addMerkleTree(...)` on the `MerkleDropFactory`, potentially including an `approve` call as part of the sequence if the `MerkleDropFactory` pulls tokens.
 - `ZkCappedMinterV2` (as `cappedMinter`), with the `caller` granted `MINTER_ROLE`.
 
 ## Key Test Scenarios
 
 ### In `ZkMinterModTriggerV1Test` & `MintFromZkCappedMinter`:
-- **`testInitiateCallFullBalance()` / `testMintFromCappedMinterAndInitiateCall()`**: 
-    - Verifies that `initiateCall()` successfully mints tokens from `cappedMinter`, approves the `target` (`ZkMinterModTargetExampleV1`), and calls `executeTransferAndLogic` on it.
-    - Checks that tokens are transferred correctly to the `target`.
-    - Confirms event emission (`TransferProcessed`).
-- **`testFailInsufficientBalance()` (Illustrative, may need context adjustment)**:
-    - This test, as originally written, seems to test a scenario where the *trigger contract itself* has a balance, which is not the primary flow when using `ZkCappedMinterV2`. The primary flow is that `ZkMinterModTriggerV1` mints *new* tokens from `ZkCappedMinterV2`. A more relevant test for insufficient balance would be if `ZkCappedMinterV2` cannot mint the requested amount (e.g., cap reached).
-- **`testCallWithCustomCallData()`**: 
-    - Reinforces that `initiateCall` uses the `callData` configured in the `trigger`'s constructor or set by an admin.
+- **`testInitiateCallFullBalance()` / `testMintFromCappedMinterAndInitiateCall()` / `testCallWithCustomCallData()`**: 
+    - Verifies that `initiateCall()` successfully mints tokens from `cappedMinter` to the `trigger` contract.
+    - Then, the `trigger` executes the configured sequence: 
+        1. Calls `approve()` on the `token` contract (allowing `target` to spend tokens held by `trigger`).
+        2. Calls `executeTransferAndLogic()` on the `target` (`ZkMinterModTargetExampleV1`), which then uses `transferFrom` to pull tokens from `trigger`.
+    - Checks that tokens are ultimately transferred correctly to the `target` and the `trigger`'s balance is zeroed out.
+    - Verifies that the allowance set on the `token` contract is consumed.
+    - Confirms event emission (`TransferProcessed` from the `target`).
+- **`test_RevertWhen_FunctionCallFailed()`**:
+    - Verifies that `initiateCall()` reverts with the message "Function call failed" if any call in the sequence fails. This is tested by configuring the `trigger` with call data that would attempt to use more tokens than the `cappedMinter`'s cap (e.g., trying to approve/transfer 600 ether when cap is 500 ether).
 
 ### In `MerkleTargetTest`:
 - **`testAddMerkleTreeViaCaller()`**: 

@@ -49,11 +49,12 @@ The Trigger Mod is an architectural pattern with `ZkMinterModTriggerV1.sol` (the
 
 - **`ZkMinterModTriggerV1.sol` (The "Trigger Mod" Contract):**
     - **Role:** The central orchestrator. Holds `MINTER_ROLE` on a `ZkCappedMinterV2`.
-    - **Configuration:** Initialised with an `admin` address, the `token` address, `target` contract address, the `functionSignature`, and `callData` for the target function. The `minter` address is configured post-deployment via `setMinter()` by the `admin`.
+    - **Configuration:** Initialized with an `admin` address, and three parallel arrays: `targets` (an array of target contract addresses), `functionSignatures` (an array of 4-byte function selectors for the respective targets), and `callDatas` (an array of encoded arguments for the respective functions). The lengths of these arrays must match. The token type used is implicitly defined by the `minter` contract, which is configured post-deployment via `setMinter()` by the `admin`.
     - **Core Functionality - `initiateCall()`:**
-        1. Determines the amount of tokens available to mint (up to the `minter`'s cap) and mints these tokens from `minter` to itself.
-        2. Approves the `target` contract to spend these minted tokens.
-        3. Constructs the full call data by combining `functionSignature` and `callData`, then calls the specified function on the `target` with this data.
+        1. Determines the amount of tokens available to mint from the `minter` contract (respecting the minter's cap) and mints these tokens from `minter` directly to itself (`address(this)`).
+        2. Iterates through the configured `targets`, `functionSignatures`, and `callDatas` arrays.
+        3. For each entry `i` in the arrays, it constructs the `fullCallData` by concatenating `functionSignatures[i]` and `callDatas[i]`.
+        4. Executes the call to `targets[i]` with this `fullCallData`. The entire `initiateCall` transaction reverts if any of these sub-calls fail. If a target requires tokens, one of the calls in the sequence would typically be an `approve` call to the token contract, followed by the target contract's function call which would then use `transferFrom`.
 - **`ZkCappedMinterV2.sol`:**
     - **Role:** The ultimate source of tokens, enforcing TPP caps set by the **Token Governor**. Grants `MINTER_ROLE` to `ZkMinterModTriggerV1.sol`.
 
@@ -63,10 +64,12 @@ The power of `ZkMinterModTriggerV1.sol` lies in its ability to interact with *an
 
 - **`ZkMinterModTargetExampleV1.sol` (Illustrative Generic Target):**
     - **Purpose:** This contract serves as a clear, simple template demonstrating the *pattern* a target contract follows when interacting with `ZkMinterModTriggerV1.sol`. It's not meant for a single specific use case but rather to show the fundamental mechanics.
-    - **Interaction Flow:**
-        1. `ZkMinterModTriggerV1.sol`, after minting and approving tokens, calls a designated function on `ZkMinterModTargetExampleV1.sol` (e.g., `executeTransferAndLogic`).
-        2. Inside `executeTransferAndLogic`, `ZkMinterModTargetExampleV1.sol` uses the standard ERC20 `transferFrom` function to pull the tokens that `ZkMinterModTriggerV1.sol` has made available (`ZkMinterModTriggerV1.sol` is `msg.sender` in this call). The `from` address in `transferFrom` is effectively `address(ZkMinterModTriggerV1)`.
-        3. After securing the tokens, `ZkMinterModTargetExampleV1.sol` can then execute its own specific business logic (represented by a `performLogic()` function). This logic is placeholder and would be implemented by developers for their specific needs (e.g., recording a deposit, updating state, forwarding funds).
+    - **Interaction Flow (as part of a configured sequence):**
+        `ZkMinterModTriggerV1.sol` is configured to execute a sequence of calls. To interact with `ZkMinterModTargetExampleV1.sol` such that it receives tokens, the sequence would typically be:
+        1. **Call 1 (by `ZkMinterModTriggerV1`):** An `approve` call to the relevant ERC20 token contract. `ZkMinterModTriggerV1` approves `ZkMinterModTargetExampleV1.sol` to spend a certain `amount` of tokens held by `ZkMinterModTriggerV1.sol`.
+        2. **Call 2 (by `ZkMinterModTriggerV1`):** A call to a designated function on `ZkMinterModTargetExampleV1.sol` (e.g., `executeTransferAndLogic(amount)`).
+        3. **Inside `executeTransferAndLogic` (on `ZkMinterModTargetExampleV1.sol`):** The target contract uses the standard ERC20 `transferFrom(address from, address to, uint256 amount)` function to pull the tokens. Here, `from` is `address(ZkMinterModTriggerV1)` (the `msg.sender` of the `executeTransferAndLogic` call), `to` is `address(this)` (i.e., `ZkMinterModTargetExampleV1.sol`), and `amount` is the quantity of tokens.
+        4. After securing the tokens, `ZkMinterModTargetExampleV1.sol` can then execute its own specific business logic (represented by a `performLogic()` function).
     - **Diagram: `ZkMinterModTriggerV1` with `ZkMinterModTargetExampleV1`**
         
         ```mermaid
@@ -91,11 +94,11 @@ The power of `ZkMinterModTriggerV1.sol` lies in its ability to interact with *an
     - **Significance:** `ZkMinterModTargetExampleV1.sol` clarifies the "pull" part of the interaction. It shows that target contracts don't need to be minter-aware; they just need a way to receive an approved token transfer.
 - **`MerkleDropFactory.sol` (Concrete Target Example - Airdrop Funding):**
     - **Purpose:** This is a real-world example of a target contract. A `MerkleDropFactory` is used to create and manage Merkle tree-based airdrops, allowing efficient distribution of tokens to many recipients.
-    - **Interaction Flow:**
-        1. `ZkMinterModTriggerV1.sol` is configured with the `MerkleDropFactory`'s address and the specific function signature for depositing tokens (e.g., `depositTokens(bytes32 treeId, uint256 amount)`).
-        2. When `initiateCall()` is triggered, `ZkMinterModTriggerV1.sol` mints the required token `amount` and approves the `MerkleDropFactory` contract.
-        3. `ZkMinterModTriggerV1.sol` then calls `MerkleDropFactory.depositTokens(...)`, passing the `treeId` for the airdrop and the `amount` of tokens.
-        4. The `MerkleDropFactory` would then internally use `transferFrom` to pull the approved tokens from `ZkMinterModTriggerV1.sol` and credit them to the specified Merkle tree, making them available for claiming by eligible airdrop recipients.
+    - **Interaction Flow (as part of a configured sequence):**
+        To use `ZkMinterModTriggerV1.sol` to fund a `MerkleDropFactory`, the trigger would be configured with a sequence of calls:
+        1. **Call 1 (by `ZkMinterModTriggerV1`):** An `approve` call to the ERC20 token contract that the `MerkleDropFactory` expects. `ZkMinterModTriggerV1` approves the `MerkleDropFactory`'s address to spend the required `amount` of tokens held by `ZkMinterModTriggerV1.sol`.
+        2. **Call 2 (by `ZkMinterModTriggerV1`):** A call to the `MerkleDropFactory`'s token deposit function (e.g., `depositTokens(uint treeIndex, uint256 amount)` if it's adding to an existing tree, or a function like `addMerkleTree` which might also handle the initial deposit if `MerkleDropFactory.sol` is designed that way and `addMerkleTree` itself calls `transferFrom`).
+        3. **Inside `MerkleDropFactory.sol`:** The factory contract, upon receiving the call from `ZkMinterModTriggerV1` (who is `msg.sender`), would use `transferFrom(address(ZkMinterModTriggerV1), address(this), amount)` to pull the approved tokens. These tokens are then credited to the specified Merkle tree or used as per the factory's logic.
     - **Diagram: `ZkMinterModTriggerV1` with `MerkleDropFactory`**
         
         ```mermaid
@@ -136,19 +139,23 @@ sequenceDiagram
     TG->>CM: Approve TPP, Deploy/Configure CappedMinter
     TG->>ZkMMT: Deploy/Configure ZkMinterModTriggerV1
     TG->>CM: grantRole(MINTER_ROLE, address(ZkMMT))
-    Admin->>ZkMMT: setTarget(address(Target), funcSig, callData)
+    Admin->>ZkMMT: setCallParameters(targets[], funcSigs[], callDatas[])
 
-    Note over ExtTrigger,ZkMMT: Later, when funds are needed...
+    Note over ExtTrigger,ZkMMT: Later, when operations are needed...
     ExtTrigger->>ZkMMT: initiateCall()
-    ZkMMT->>CM: mint(address(this), amount)
+    ZkMMT->>CM: mint(address(this), availableAmount)
     CM-->>ZkMMT: (Minted tokens arrive at ZkMinterModTriggerV1)
-    ZkMMT->>Token: approve(address(Target), amount)
-    Token-->>ZkMMT: (Approval successful)
-    ZkMMT->>Target: target.call(abi.encodePacked(funcSig, callData))
-    Note over Target,Token: Target (e.g., ZkMinterModTargetExampleV1 or MDF) executes its logic...
-    Target->>Token: transferFrom(address(ZkMMT), address(this), amount)
-    Token-->>Target: (Tokens transferred to Target)
-    Target->>Target: (Target-specific logic, e.g., performLogic / UpdateTreeState)
+    loop For each (target_i, funcSig_i, callData_i) in ZkMMT's configured sequence
+        ZkMMT->>target_i: target_i.call(abi.encodePacked(funcSig_i, callData_i))
+        alt If target_i is Token Contract (for an approve call)
+            target_i-->>ZkMMT: (Approval successful for a subsequent target_j)
+        else Else (target_i is an application contract)
+            Note over target_i,Token: If target_i needs tokens and was approved in a prior step by ZkMMT...
+            target_i->>Token: transferFrom(address(ZkMMT), address(this), relevant_amount_i)
+            Token-->>target_i: (Tokens transferred to target_i)
+            target_i->>target_i: (Target-specific logic)
+        end
+    end
 
 ```
 
@@ -186,7 +193,7 @@ graph TD
 
 ### Access Control
 
-- **ZkMinterModTriggerV1.sol Configuration:** Restricted to the `admin`.
+- **ZkMinterModTriggerV1.sol Configuration:** Restricted to the `admin`. The admin uses functions like `setTargets()`, `setFunctionSignatures()`, `setCallDatas()`, or `setCallParameters()` to configure the sequence of calls.
 - **Triggering initiateCall():** Flexible (permissionless or role-restricted).
 - **Overall Programme Control:** Via ZkCappedMinterV2 by the Token Governor.
 
