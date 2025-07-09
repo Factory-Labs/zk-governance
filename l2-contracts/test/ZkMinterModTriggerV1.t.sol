@@ -94,7 +94,7 @@ contract ZkMinterModTriggerV1Test is Test {
         cappedMinter.grantRole(MINTER_ROLE, address(trigger));
     }
 
-    function testInitiateCallFullBalance() public {
+    function testMintFullBalance() public {
         uint256 initialBalance = token.balanceOf(address(trigger));
         assertEq(initialBalance, 0);
 
@@ -102,9 +102,9 @@ contract ZkMinterModTriggerV1Test is Test {
         vm.expectEmit(true, false, false, true, address(target));
         emit TransferProcessed(address(trigger), 500 ether);
 
-        // Call initiateCall as the user (though caller uses its own balance)
+        // Call mint with the actual amount needed (500 ether)
         vm.prank(user);
-        trigger.initiateCall();
+        trigger.mint(500 ether);  // Changed from 0 to 500 ether
 
         // Verify tokens were transferred to the target
         assertEq(token.balanceOf(address(trigger)), 0);
@@ -114,7 +114,7 @@ contract ZkMinterModTriggerV1Test is Test {
         assertEq(token.allowance(address(trigger), address(target)), 0);
     }
 
-    function test_RevertWhen_FunctionCallFailed() public {
+    function test_RevertWhen_MintExceedsCap() public {
         // Deploy a new trigger with invalid call data (amount exceeds cap)
         address[] memory targetAddresses = new address[](2);
         targetAddresses[0] = address(token);
@@ -125,8 +125,8 @@ contract ZkMinterModTriggerV1Test is Test {
         functionSignatures[1] = abi.encodeWithSignature("executeTransferAndLogic(uint256)");
 
         bytes[] memory callDatas = new bytes[](2);
-        callDatas[0] = abi.encode(address(target), uint256(600 ether)); // Approve 600 ether
-        callDatas[1] = abi.encode(uint256(600 ether)); // Try to transfer 600 ether
+        callDatas[0] = abi.encode(address(target), uint256(500 ether));
+        callDatas[1] = abi.encode(uint256(500 ether));
 
         ZkMinterModTriggerV1 badTrigger = new ZkMinterModTriggerV1(
             cappedMinterAdmin,
@@ -141,10 +141,10 @@ contract ZkMinterModTriggerV1Test is Test {
         vm.prank(cappedMinterAdmin);
         cappedMinter.grantRole(MINTER_ROLE, address(badTrigger));
 
-        // Should revert due to function call failure (exceeds cap)
+        // Should revert due to function call failure (invalid target)
         vm.prank(user);
-        vm.expectRevert("Function call failed");
-        badTrigger.initiateCall();
+        vm.expectRevert(abi.encodeWithSignature("ZkCappedMinterV2__CapExceeded(address,uint256)", address(badTrigger), 1000 ether));
+        badTrigger.mint(1000 ether); // Try to mint 1000 ether (exceeds cap of 500 ether)
     }
 
 
@@ -155,7 +155,7 @@ contract ZkMinterModTriggerV1Test is Test {
 
         // Call initiateCall
         vm.prank(user);
-        trigger.initiateCall();
+        trigger.mint(500 ether);
 
         // Verify token transfer
         assertEq(token.balanceOf(address(trigger)), 0);
@@ -185,7 +185,7 @@ contract MintFromZkCappedMinter is ZkMinterModTriggerV1Test {
 
         // Execute the initiateCall flow
         vm.prank(user);
-        trigger.initiateCall();
+        trigger.mint(500 ether);
 
         // Verify final state
         assertEq(token.balanceOf(address(trigger)), 0);
@@ -276,7 +276,7 @@ contract MerkleTargetTest is Test {
 
         // Call initiateCall
         vm.prank(user);
-        caller.initiateCall();
+        caller.mint(500 ether);
 
         // Verify tokens were minted and transferred to target via addMerkleTree
         assertEq(token.balanceOf(address(caller)), 0);
@@ -356,7 +356,7 @@ contract MerkleTargetTest is Test {
 
         // Should revert due to exceeding cap
         vm.prank(user);
-        vm.expectRevert("Function call failed");
-        badCaller.initiateCall();
+        vm.expectRevert(abi.encodeWithSignature("ZkCappedMinterV2__CapExceeded(address,uint256)", address(badCaller), 600 ether));
+        badCaller.mint(600 ether);
     }
 }

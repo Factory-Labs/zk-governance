@@ -91,12 +91,8 @@ contract ZkMinterModTriggerV1 {
     }
 
     // Function to approve and call with arbitrary calldata
-    function initiateCall() external {
-        // Get this contract's entire token balance
-        uint256 available = minter.CAP() - minter.minted();
-        require(available > 0, "No tokens available");
-
-        minter.mint(address(this), available);
+    function mint(uint256 _amount) external {
+        minter.mint(address(this), _amount);
 
         require(targets.length == functionSignatures.length &&
                 functionSignatures.length == callDatas.length,
